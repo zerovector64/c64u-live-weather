@@ -1,0 +1,13 @@
+{
+    "name": "live-weather",
+    "description": "C64U Live Weather Dashboard Project",
+    "toolkit": "cc65",
+    "sources": [
+        "src/main.c"
+    ],
+    "build": "debug",
+    "definitions": [],
+    "includes": [],
+    "args": [],
+    "compiler": ""
+}

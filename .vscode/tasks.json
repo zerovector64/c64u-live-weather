@@ -1,0 +1,66 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "vs64",
+            "action": "build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "label": "build project"
+        },
+        {
+            "label": "build and run on c64 ultimate",
+            "type": "shell",
+            "dependsOn": [
+                "build project"
+            ],
+            "dependsOrder": "sequence",
+            "command": "curl.exe",
+            "args": [
+                "--fail",
+                "--silent",
+                "--show-error",
+                "-X",
+                "POST",
+                "http://${config:c64ultimate.ip}/v1/runners:run_prg",
+                "-F",
+                "file=@${workspaceFolder}/build/live-weather.prg"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "push live data to c64 ultimate",
+            "type": "shell",
+            "command": "php",
+            "args": [
+                "${workspaceFolder}/php/live_bridge.php",
+                "--mode",
+                "mem",
+                "--ultimate-ip",
+                "${config:c64ultimate.ip}",
+                "--once"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "start live bridge to c64 ultimate",
+            "type": "shell",
+            "command": "php",
+            "args": [
+                "${workspaceFolder}/php/live_bridge.php",
+                "--mode",
+                "mem",
+                "--ultimate-ip",
+                "${config:c64ultimate.ip}"
+            ],
+            "isBackground": true,
+            "problemMatcher": []
+        }
+    ]
+}

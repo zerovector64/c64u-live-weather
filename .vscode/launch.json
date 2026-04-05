@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "type": "vice",
+            "request": "launch",
+            "name": "Launch Vice",
+            "preLaunchTask": "${defaultBuildTask}"
+        },
+        {
+            "type": "vice",
+            "request": "attach",
+            "name": "Attach Vice",
+            "hostname": "localhost",
+            "port": 6502,
+            "preLaunchTask": "${defaultBuildTask}"
+        },
+        {
+            "type": "6502",
+            "request": "launch",
+            "name": "Launch 6502",
+            "preLaunchTask": "${defaultBuildTask}"
+        },
+        {
+            "type": "node-terminal",
+            "request": "launch",
+            "name": "Deploy to C64 Ultimate",
+            "preLaunchTask": "build and run on c64 ultimate",
+            "command": "echo Deploy task completed"
+        }
+    ]
+}
