@@ -33,6 +33,7 @@
 #define MEATLOAF_CONFIG_FILE_REPLACE  "@0:live-weather.cfg,s,w"
 #define MEATLOAF_JSON_USCORE          "\x5f"
 #define TITLE_TEXT                 "C64 LIVE WEATHER"
+#define CREDIT_TEXT                "@ZEROVECTOR64"
 #define QUIT_TEXT              "PRESS ANY KEY TO QUIT"
 
 typedef struct LiveData {
@@ -466,7 +467,7 @@ static void set_defaults (LiveData* data)
     data->poll_interval_s = 0u;
     copy_text (data->feed, FEED_TEXT, sizeof (data->feed));
     copy_text (data->condition, "WAITING", sizeof (data->condition));
-    copy_text (data->stamp, "NO PUSH YET", sizeof (data->stamp));
+    copy_text (data->stamp, "WAITING", sizeof (data->stamp));
 
     if (selected_source_mode == SOURCE_MODE_MEATLOAF) {
         data->temp_unit = meatloaf_config.temp_unit;
@@ -1015,8 +1016,13 @@ static void render_dashboard (const LiveData* data, unsigned char has_live_push)
         cputsxy (4u, 22u, "LIVE DATA ACTIVE");
     } else {
         textcolor (COLOR_ORANGE);
-        cputsxy (4u, 22u, "WAITING FOR LIVE DATA...");
+        cputsxy (4u, 22u, "WAITING FOR LIVE...");
     }
+
+    textcolor (COLOR_YELLOW);
+    revers (1);
+    cputsxy (25u, 22u, CREDIT_TEXT);
+    revers (0);
 
     textcolor (COLOR_WHITE);
     cputsxy ((SCREEN_WIDTH - (sizeof (QUIT_TEXT) - 1u)) / 2u, 23u, QUIT_TEXT);
