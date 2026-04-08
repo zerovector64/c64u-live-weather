@@ -28,6 +28,13 @@
             "name": "Deploy to C64 Ultimate",
             "preLaunchTask": "build and run on c64 ultimate",
             "command": "echo Deploy task completed"
+        },
+        {
+            "type": "node-terminal",
+            "request": "launch",
+            "name": "Deploy to Meatloaf WebDAV",
+            "preLaunchTask": "deploy prg to meatloaf webdav",
+            "command": "echo Meatloaf WebDAV deploy completed"
         }
     ]
 }

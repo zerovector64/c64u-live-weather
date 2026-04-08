@@ -4,20 +4,22 @@ declare(strict_types=1);
 $cliOptions = getopt('', [
     'lat:',
     'lon:',
-    'title:',
     'location:',
     'interval:',
     'temp-unit:',
     'once',
     'mode:',
     'out:',
+    'packet-out:',
+    'listen:',
+    'port:',
     'ultimate-ip:',
     'ultimate-max-tries:',
     'address:',
     'password:',
 ]);
 $bridgeDefaults = [
-    'title' => 'api.open-meteo.com',
+    'feed' => 'api.open-meteo.com',
     'location' => 'New York',
     'lat' => '40.7128',
     'lon' => '-74.0060',
@@ -26,7 +28,10 @@ $bridgeDefaults = [
     'address' => 'C800',
     'ultimate_max_tries' => '3',
     'mode' => 'file',
+    'listen' => '0.0.0.0',
+    'port' => '6400',
     'out' => dirname(__DIR__) . DIRECTORY_SEPARATOR . 'LIVE.DAT',
+    'packet_out' => dirname(__DIR__) . DIRECTORY_SEPARATOR . 'LIVE.BIN',
 ];
 
 function option_value(array $cliOptions, string $name, string $default): string
@@ -216,6 +221,78 @@ function map_icon_code(int $code): int
 
 function write_live_file(string $path, string $contents): void
 {
+    if (preg_match('#^https?://#i', $path) === 1) {
+        $headers = [
+            'Content-Type: application/octet-stream',
+            'Content-Length: ' . strlen($contents),
+            'User-Agent: c64-live-dashboard/1.0',
+            'Expect:',
+        ];
+
+        if (function_exists('curl_init')) {
+            $ch = curl_init($path);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 15,
+                CURLOPT_CUSTOMREQUEST => 'PUT',
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_POSTFIELDS => $contents,
+            ]);
+
+            $body = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+            if (PHP_VERSION_ID < 80000) {
+                curl_close($ch);
+            }
+
+            if ($body !== false && $code < 400) {
+                return;
+            }
+        }
+
+        $contextHeader = implode("\r\n", $headers) . "\r\n";
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'PUT',
+                'timeout' => 15,
+                'header' => $contextHeader,
+                'content' => $contents,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $body = @file_get_contents($path, false, $context);
+        if ($body !== false) {
+            return;
+        }
+
+        if (function_exists('exec')) {
+            $tmp = tempnam(sys_get_temp_dir(), 'c64lw_');
+            if ($tmp === false) {
+                throw new RuntimeException('Unable to create temp file for remote upload: ' . $path);
+            }
+
+            if (file_put_contents($tmp, $contents, LOCK_EX) === false) {
+                @unlink($tmp);
+                throw new RuntimeException('Unable to stage remote upload file: ' . $tmp);
+            }
+
+            $command = 'curl.exe --fail --silent --show-error -T ' . escapeshellarg($tmp) . ' ' . escapeshellarg($path) . ' 2>&1';
+            $output = [];
+            $exitCode = 1;
+            exec($command, $output, $exitCode);
+            @unlink($tmp);
+
+            if ($exitCode === 0) {
+                return;
+            }
+        }
+
+        throw new RuntimeException('Unable to write remote file: ' . $path);
+    }
+
     $dir = dirname($path);
     if (!is_dir($dir)) {
         mkdir($dir, 0777, true);
@@ -231,7 +308,7 @@ function write_live_file(string $path, string $contents): void
     }
 }
 
-function build_payload_text(string $title, string $location, array $current, string $tempUnit): string
+function build_payload_text(string $feed, string $location, array $current, string $tempUnit): string
 {
     $tempUnit = normalize_temp_unit($tempUnit);
     $condition = map_condition((int) ($current['weather_code'] ?? 0));
@@ -242,7 +319,7 @@ function build_payload_text(string $title, string $location, array $current, str
     $stamp = strtoupper(substr((string) ($current['time'] ?? date('Y-m-d\TH:i')), 0, 16));
 
     $lines = [
-        'TITLE=' . strtoupper(substr($title, 0, 20)),
+        'FEED=' . strtoupper(substr($feed, 0, 20)),
         'LOCATION=' . strtoupper(substr($location, 0, 20)),
         'CONDITION=' . strtoupper(substr($condition, 0, 16)),
         'TEMP_' . $tempUnit . '=' . (string) $temp,
@@ -256,7 +333,7 @@ function build_payload_text(string $title, string $location, array $current, str
     return implode(PHP_EOL, $lines) . PHP_EOL;
 }
 
-function build_memory_packet(string $title, string $location, array $current, string $tempUnit, int $interval): string
+function build_memory_packet(string $feed, string $location, array $current, string $tempUnit, int $interval): string
 {
     static $sequence = null;
 
@@ -291,12 +368,85 @@ function build_memory_packet(string $title, string $location, array $current, st
         $packetFlags
     );
 
-    $packet .= fit_field($title, 20);
+    $packet .= fit_field($feed, 20);
     $packet .= fit_field($location, 20);
     $packet .= fit_field($condition, 16);
     $packet .= fit_field($stamp, 16);
 
     return $packet;
+}
+
+function fetch_live_snapshot(string $feed, string $location, float $lat, float $lon, string $tempUnit, int $interval): array
+{
+    $current = fetch_live_current($lat, $lon, $tempUnit);
+    $payload = build_payload_text($feed, $location, $current, $tempUnit);
+    $packet = build_memory_packet($feed, $location, $current, $tempUnit, $interval);
+
+    return [
+        'current' => $current,
+        'payload' => $payload,
+        'packet' => $packet,
+    ];
+}
+
+function serve_memory_packet(string $listenAddress, int $port, int $interval, callable $snapshotFactory, bool $serveOnce = false): void
+{
+    $serverAddress = sprintf('tcp://%s:%d', $listenAddress, $port);
+    $server = @stream_socket_server($serverAddress, $errno, $errstr);
+
+    if ($server === false) {
+        throw new RuntimeException('Unable to start TCP server on ' . $serverAddress . ': ' . $errstr . ' (' . $errno . ')');
+    }
+
+    stream_set_blocking($server, false);
+    log_message('tcp server listening on ' . $listenAddress . ':' . (string) $port);
+
+    $lastRefreshAt = 0;
+    $lastPacket = '';
+    $servedClients = 0;
+
+    while (true) {
+        $now = time();
+
+        try {
+            if ($lastRefreshAt === 0 || ($now - $lastRefreshAt) >= $interval) {
+                $snapshot = $snapshotFactory();
+                $lastPacket = $snapshot['packet'];
+                $lastRefreshAt = $now;
+                echo $snapshot['payload'] . PHP_EOL;
+            }
+        } catch (Throwable $e) {
+            fwrite(STDERR, '[' . date('Y-m-d H:i:s') . '] error: ' . $e->getMessage() . PHP_EOL);
+            $lastRefreshAt = $now;
+        }
+
+        $read = [$server];
+        $write = null;
+        $except = null;
+        $ready = @stream_select($read, $write, $except, 1);
+
+        if ($ready === false) {
+            throw new RuntimeException('TCP server select failed');
+        }
+
+        if ($ready > 0) {
+            $peerName = 'client';
+            $client = @stream_socket_accept($server, 0, $peerName);
+
+            if (is_resource($client)) {
+                fwrite($client, $lastPacket);
+                fclose($client);
+                $servedClients++;
+                log_message('served ' . strlen($lastPacket) . ' bytes to ' . $peerName);
+
+                if ($serveOnce) {
+                    break;
+                }
+            }
+        }
+    }
+
+    fclose($server);
 }
 
 function send_to_ultimate_memory(string $ultimateIp, string $address, string $packet, string $password): array
@@ -358,7 +508,7 @@ function fetch_live_current(float $lat, float $lon, string $tempUnit): array
     return $data['current'];
 }
 
-$title = option_value($cliOptions, 'title', $bridgeDefaults['title']);
+$feed = $bridgeDefaults['feed'];
 $lat = (float) option_value($cliOptions, 'lat', $bridgeDefaults['lat']);
 $lon = (float) option_value($cliOptions, 'lon', $bridgeDefaults['lon']);
 $location = option_value($cliOptions, 'location', $bridgeDefaults['location']);
@@ -368,11 +518,29 @@ $ultimateIp = option_value($cliOptions, 'ultimate-ip', '');
 $ultimateMaxTries = max(1, (int) option_value($cliOptions, 'ultimate-max-tries', $bridgeDefaults['ultimate_max_tries']));
 $address = option_value($cliOptions, 'address', $bridgeDefaults['address']);
 $password = option_value($cliOptions, 'password', '');
+$listenAddress = option_value($cliOptions, 'listen', $bridgeDefaults['listen']);
+$port = clamp_value((int) option_value($cliOptions, 'port', $bridgeDefaults['port']), 1, 65535);
 $outFile = option_value($cliOptions, 'out', $bridgeDefaults['out']);
-$outFile = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $outFile);
+$packetOutFile = option_value($cliOptions, 'packet-out', $bridgeDefaults['packet_out']);
+if (preg_match('#^https?://#i', $outFile) !== 1) {
+    $outFile = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $outFile);
+}
+if (preg_match('#^https?://#i', $packetOutFile) !== 1) {
+    $packetOutFile = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $packetOutFile);
+}
 $defaultMode = $ultimateIp !== '' ? 'mem' : $bridgeDefaults['mode'];
 $mode = strtolower(option_value($cliOptions, 'mode', $defaultMode));
 $once = isset($cliOptions['once']);
+
+if ($mode === 'meatloaf') {
+    $mode = 'file';
+} elseif ($mode === 'serve') {
+    $mode = 'tcp';
+}
+
+if (!in_array($mode, ['file', 'mem', 'tcp'], true)) {
+    throw new InvalidArgumentException('mode must be one of: file, mem, tcp');
+}
 
 if ($mode === 'mem' && $ultimateIp === '') {
     throw new InvalidArgumentException('mem mode requires --ultimate-ip');
@@ -381,8 +549,39 @@ if ($mode === 'mem' && $ultimateIp === '') {
 log_message('mode: ' . $mode);
 if ($mode === 'mem') {
     log_message('target: ' . $ultimateIp . ' at $' . strtoupper($address));
+} elseif ($mode === 'tcp') {
+    log_message('listen: ' . $listenAddress . ':' . (string) $port);
+    if ($packetOutFile !== '') {
+        log_message('packet file: ' . $packetOutFile);
+    }
 } else {
     log_message('output file: ' . $outFile);
+    if ($packetOutFile !== '') {
+        log_message('packet file: ' . $packetOutFile);
+    }
+}
+
+$snapshotFactory = static function () use ($feed, $location, $lat, $lon, $tempUnit, $interval, $packetOutFile): array {
+    $snapshot = fetch_live_snapshot($feed, $location, $lat, $lon, $tempUnit, $interval);
+
+    if ($packetOutFile !== '') {
+        write_live_file($packetOutFile, $snapshot['packet']);
+    }
+
+    return $snapshot;
+};
+
+if ($mode === 'tcp') {
+    $exitCode = 0;
+
+    try {
+        serve_memory_packet($listenAddress, $port, $interval, $snapshotFactory, $once);
+    } catch (Throwable $e) {
+        $exitCode = 1;
+        fwrite(STDERR, '[' . date('Y-m-d H:i:s') . '] error: ' . $e->getMessage() . PHP_EOL);
+    }
+
+    exit($exitCode);
 }
 
 $consecutiveUltimateFailures = 0;
@@ -391,12 +590,12 @@ $stopRequested = false;
 
 do {
 try {
-    $current = fetch_live_current($lat, $lon, $tempUnit);
-    $payload = build_payload_text($title, $location, $current, $tempUnit);
+    $snapshot = $snapshotFactory();
+    $payload = $snapshot['payload'];
+    $packet = $snapshot['packet'];
 
     if ($mode === 'mem') {
         try {
-            $packet = build_memory_packet($title, $location, $current, $tempUnit, $interval);
             $pushInfo = send_to_ultimate_memory($ultimateIp, $address, $packet, $password);
             $consecutiveUltimateFailures = 0;
             log_message('pushed ' . (string) $pushInfo['bytes'] . ' bytes');

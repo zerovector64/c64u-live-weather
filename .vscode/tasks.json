@@ -49,6 +49,103 @@
             "problemMatcher": []
         },
         {
+            "label": "push live data to meatloaf",
+            "type": "shell",
+            "command": "php",
+            "args": [
+                "${workspaceFolder}/php/live_bridge.php",
+                "--mode",
+                "meatloaf",
+                "--packet-out",
+                "http://${config:meatloaf.ip}/sd/live.bin",
+                "--out",
+                "${workspaceFolder}/build/live.dat",
+                "--once"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy prg to meatloaf webdav",
+            "type": "shell",
+            "dependsOn": [
+                "build project"
+            ],
+            "dependsOrder": "sequence",
+            "command": "curl.exe",
+            "args": [
+                "--fail",
+                "--silent",
+                "--show-error",
+                "-T",
+                "${workspaceFolder}/build/live-weather.prg",
+                "http://${config:meatloaf.ip}/sd/live-weather.prg"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy prg to meatloaf",
+            "type": "shell",
+            "dependsOn": [
+                "deploy prg to meatloaf webdav"
+            ],
+            "dependsOrder": "sequence",
+            "command": "echo",
+            "args": [
+                "Meatloaf PRG deploy completed"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "start local ML:* dev web server",
+            "type": "shell",
+            "command": "php",
+            "args": [
+                "-S",
+                "0.0.0.0:${config:devserver.port}",
+                "-t",
+                "${workspaceFolder}/build"
+            ],
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "tag local dev build for meatloaf ML:*",
+            "type": "shell",
+            "dependsOn": [
+                "build project"
+            ],
+            "dependsOrder": "sequence",
+            "command": "curl.exe",
+            "args": [
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "https://api.meatloaf.cc/sendtomeatloaf?http://${config:devserver.ip}:${config:devserver.port}/live-weather.prg"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "build and tag local dev ML:*",
+            "type": "shell",
+            "dependsOn": [
+                "tag local dev build for meatloaf ML:*"
+            ],
+            "dependsOrder": "sequence",
+            "command": "echo",
+            "args": [
+                "Ready to LOAD\"ML:*\",8,1 from http://${config:devserver.ip}:${config:devserver.port}/live-weather.prg"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
             "label": "start live bridge to c64 ultimate",
             "type": "shell",
             "command": "php",
@@ -58,6 +155,22 @@
                 "mem",
                 "--ultimate-ip",
                 "${config:c64ultimate.ip}"
+            ],
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "start live bridge to meatloaf",
+            "type": "shell",
+            "command": "php",
+            "args": [
+                "${workspaceFolder}/php/live_bridge.php",
+                "--mode",
+                "meatloaf",
+                "--packet-out",
+                "http://${config:meatloaf.ip}/sd/live.bin",
+                "--out",
+                "${workspaceFolder}/build/live.dat"
             ],
             "isBackground": true,
             "problemMatcher": []
